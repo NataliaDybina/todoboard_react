@@ -1,0 +1,294 @@
+-e \n\n--- FILE: src/App.tsx ---\n
+import './App.css'
+import {useEffect, useState} from "react";
+import axios from "axios";
+import TaskList from "./components/TaskList.tsx";
+import {Status, type Task} from "./components/TaskCard.tsx";
+import TaskDetails from "./components/TaskDetails.tsx";
+
+function App() {
+    const [tasks, setTasks] = useState<Task[]>([]);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [selectedTask, setSelectedTask] = useState<Task | undefined>(undefined);
+
+    useEffect(() => {
+        function getAllTasks() {
+            axios.get("/api/todo").then(res => setTasks(res.data))
+                .catch(err => console.log(err));
+        }
+
+        getAllTasks()
+    }, [])
+
+    const handleSaveTask = (savedTask: Task) => {
+
+        setTasks(prevTasks => {
+            const exists = prevTasks.some(t => t.id === savedTask.id);
+            if (exists)
+                return prevTasks.map(t => t.id === savedTask.id ? savedTask : t);
+            else
+                return [...prevTasks, savedTask]
+        });
+    };
+
+    const handleDeleteTask = (id: string) => {
+        setTasks(prev => prev.filter(task => task.id !== id));
+    }
+    const handleOpenAddModal = () => {
+        setSelectedTask(undefined);
+        setIsModalOpen(true);
+    };
+
+    const handleOpenEditModal = (task: Task) => {
+        setSelectedTask(task);
+        setIsModalOpen(true);
+    };
+
+    return (
+        <>
+            <div className="kanban-app">
+
+                <header className="kanban-header">
+                    <h1>Kanban Board</h1>
+                    <button id="open-modal-btn" className="btn btn-primary" onClick={handleOpenAddModal}>
+                        + Add New Task
+                    </button>
+                </header>
+
+
+                <main className="kanban-board">
+                    <TaskList status={Status.OPEN} title="Open"
+                              tasks={tasks.filter(task => task.status === Status.OPEN)}
+                              onTaskUpdated={handleSaveTask}
+                              onTaskDeleted={handleDeleteTask}
+                              onTaskEdit={handleOpenEditModal}/>
+                    <TaskList status={Status.IN_PROGRESS} title="In progress"
+                              tasks={tasks.filter(task => task.status === Status.IN_PROGRESS)}
+                              onTaskUpdated={handleSaveTask}
+                              onTaskDeleted={handleDeleteTask}
+                              onTaskEdit={handleOpenEditModal}/>
+                    <TaskList status={Status.DONE} title="Done"
+                              tasks={tasks.filter(task => task.status === Status.DONE)}
+                              onTaskUpdated={handleSaveTask}
+                              onTaskDeleted={handleDeleteTask}
+                              onTaskEdit={handleOpenEditModal}/>
+
+                </main>
+
+                {isModalOpen && <TaskDetails setIsModalOpen={setIsModalOpen}
+                                             onTaskSaved={handleSaveTask}
+                                             taskToEdit={selectedTask}
+                />}
+            </div>
+        </>
+    )
+}
+
+export default App
+-e \n\n--- FILE: src/main.tsx ---\n
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+-e \n\n--- FILE: src/components/TaskCard.tsx ---\n
+import axios from "axios";
+import type {MouseEvent} from "react";
+
+export const Status = {
+    OPEN: "OPEN",
+    IN_PROGRESS: "IN_PROGRESS",
+    DONE: "DONE",
+} as const;
+export type Status = typeof Status[keyof typeof Status];
+
+export type Task = {
+    id: string;
+    description: string;
+    status: Status;
+}
+
+export type TaskCardProps = {
+    task: Task;
+    onTaskUpdated: (updatedTask: Task) => void;
+    onTaskDeleted: (taskId: string) => void;
+    onTaskEdit: (task: Task) => void;
+}
+export default function TaskCard({task, onTaskUpdated, onTaskDeleted, onTaskEdit}: TaskCardProps) {
+    function handleDeleteTask(e: MouseEvent<HTMLButtonElement>): void {
+        e.stopPropagation();
+
+        axios.delete(`/api/todo/${task.id}`, {})
+            .then(r => {
+                    console.log(r);
+                    onTaskDeleted(task.id);
+                }
+            )
+            .catch(err => console.log(err));
+    }
+
+    function handleUpdateStatus(e: MouseEvent<HTMLButtonElement>, direction: string): void {
+        e.stopPropagation();
+
+        let newStatus;
+        if (direction === "back")
+            newStatus = task.status === Status.DONE ? Status.IN_PROGRESS : Status.OPEN;
+        else
+            newStatus = task.status === Status.OPEN ? Status.IN_PROGRESS : Status.DONE;
+
+        const updatedTask: Task = {
+            id: task.id,
+            description: task.description,
+            status: newStatus
+        }
+        axios.put(`/api/todo/${task.id}/update`, updatedTask)
+            .then(r => {
+                console.log(r);
+                onTaskUpdated(updatedTask);
+            })
+            .catch(err => console.log(err));
+    }
+
+    return (
+        <div className="task-card" data-id={task.id} onClick={() => onTaskEdit(task)}>
+            <div className="task-content">
+                <h3>{task.description}</h3>
+            </div>
+            <div className="task-footer">
+                <span className="badge open">{task.status}</span>
+                <div className="task-actions">
+                    {task.status != Status.OPEN &&
+                        <button className="btn-icon" title="Move Back"
+                                onClick={(e) => handleUpdateStatus(e, "back")}>⬅️</button>}
+                    {task.status != Status.DONE &&
+                        <button className="btn-icon" title="Move Forward"
+                                onClick={(e) => handleUpdateStatus(e, "forward")}>➡️</button>}
+                    <button className="btn-icon" title="Edit" onClick={() => onTaskEdit(task)}>✏️</button>
+                    <button className="btn-icon delete" title="Delete" onClick={handleDeleteTask}>🗑️</button>
+                </div>
+            </div>
+        </div>
+    )
+}-e \n\n--- FILE: src/components/TaskDetails.tsx ---\n
+import type {Dispatch, SetStateAction} from "react";
+import {type SubmitEvent} from "react";
+import {Status, type Task} from "./TaskCard.tsx";
+import axios, {type AxiosError, type AxiosResponse} from "axios";
+
+type AddTaskProps = {
+    setIsModalOpen: Dispatch<SetStateAction<boolean>>;
+    onTaskSaved: (task: Task) => void;
+    taskToEdit?: Task
+}
+
+type NewTaskDTO = {
+    description: string;
+    status: Status;
+}
+export default function TaskDetails({setIsModalOpen, onTaskSaved, taskToEdit}: AddTaskProps) {
+
+    function handleSubmit(event: SubmitEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const form = new FormData(event.target);
+        const data = Object.fromEntries(form);
+
+        if (!taskToEdit) {
+            const newTask: NewTaskDTO = {
+                description: data.description.toString(),
+                status: data.status.toString() as Status
+            };
+            axios.post("/api/todo", newTask)
+                .then((response: AxiosResponse<Task>) => {
+                    onTaskSaved(response.data);
+                    setIsModalOpen(false);
+                    console.log(response);
+                })
+                .catch((error: AxiosError) => {
+                    console.log(error)
+                });
+        } else {
+            const task: Task = {
+                id: taskToEdit.id,
+                description: data.description.toString(),
+                status: data.status.toString() as Status
+            }
+            axios.put(`/api/todo/${task.id}/update`, task)
+                .then(response => {
+                    console.log(response);
+                    onTaskSaved(response.data);
+                    setIsModalOpen(false);
+                })
+                .catch(err => console.log(err));
+        }
+    }
+
+    return (
+        <div className="modal-backdrop">
+            <div className="modal">
+                <div className="modal-header">
+                    <h2>Add Task</h2>
+                    <button className="btn-close" onClick={() => setIsModalOpen(false)}>&times;</button>
+                </div>
+                <form className="task-form" onSubmit={handleSubmit}>
+                    <div className="form-group">
+                        <label htmlFor="task-description">Description / Title</label>
+                        <input type="text" id="task-description" name="description"
+                               placeholder="What needs to be done?"
+                               defaultValue={taskToEdit ? taskToEdit.description : ""}
+                               required/>
+                    </div>
+                    <div className="form-group">
+                        <label htmlFor="task-status">Status</label>
+                        <select id="task-status" name="status"
+                                defaultValue={taskToEdit ? taskToEdit.status : Status.OPEN}
+                        >
+                            <option value="OPEN">Open</option>
+                            <option value="IN_PROGRESS">In Progress</option>
+                            <option value="DONE">Done</option>
+                        </select>
+                    </div>
+                    <div className="modal-footer">
+                        <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>
+                            Cancel
+                        </button>
+                        <button type="submit" className="btn btn-primary">Save Task</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    )
+}-e \n\n--- FILE: src/components/TaskList.tsx ---\n
+import TaskCard from "./TaskCard.tsx";
+import {type Task} from './TaskCard.tsx';
+
+type TaskListProps = {
+    status: string;
+    title: string;
+    tasks: Task[];
+    onTaskUpdated: (updatedTask: Task) => void;
+    onTaskDeleted: (taskId: string) => void;
+    onTaskEdit: (task: Task) => void;
+}
+export default function TaskList({status, title, tasks, onTaskUpdated, onTaskDeleted, onTaskEdit}: TaskListProps) {
+    return (
+        <section className="kanban-column" data-status={status}>
+            <div className="column-header">
+                <h2>{title}</h2>
+                <span className="task-count">{tasks.length}</span>
+            </div>
+            <div className="task-list">
+                {tasks.map((task: Task) => (
+                    <TaskCard key={task.id} task={task}
+                              onTaskUpdated={onTaskUpdated}
+                              onTaskDeleted={onTaskDeleted}
+                              onTaskEdit={onTaskEdit}/>
+                ))}
+            </div>
+        </section>
+    )
+}
